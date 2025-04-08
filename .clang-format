@@ -1,0 +1,18 @@
+---
+Language: Cpp
+BasedOnStyle: Microsoft
+AccessModifierOffset: -4
+AlignAfterOpenBracket: BlockIndent
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowShortFunctionsOnASingleLine: All
+BinPackArguments: false
+BinPackParameters: false
+BreakBeforeBraces: Linux
+ColumnLimit: 0
+IncludeCategories:
+    - Regex: '"pch.h"'
+      Priority: -1
+    - Regex: '^<.*'
+    - Regex: '^".*'
+LineEnding: LF
+PointerAlignment: Left
