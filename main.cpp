@@ -28,6 +28,7 @@
 
 int wmain(int argc, const wchar_t* argv[])
 {
+    const bool cleartype = false;
     HRESULT hr = S_OK;
     const wchar_t* font_name = L"Segoe UI";
     const float font_size = 64.0f;
@@ -78,7 +79,7 @@ int wmain(int argc, const wchar_t* argv[])
     RETURN_IF_FAILED(fontFace->GetRecommendedRenderingMode(run.fontEmSize, dpi / 96.0f, DWRITE_MEASURING_MODE_NATURAL, rendering_params, &renderingMode));
 
     RECT bounds{};
-    BYTE* bitmap = nullptr;
+    BYTE* bitmap_data = nullptr;
     size_t bitmap_size = 0;
 
     if (renderingMode == DWRITE_RENDERING_MODE_OUTLINE) {
@@ -106,58 +107,57 @@ int wmain(int argc, const wchar_t* argv[])
             /* renderingMode    */ renderingMode,
             /* measuringMode    */ DWRITE_MEASURING_MODE_NATURAL,
             /* gridFitMode      */ DWRITE_GRID_FIT_MODE_DEFAULT,
-            /* antialiasMode    */ DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
+            /* antialiasMode    */ cleartype ? DWRITE_TEXT_ANTIALIAS_MODE_CLEARTYPE : DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
             /* baselineOriginX  */ 0.0f,
             /* baselineOriginY  */ 0.0f,
             /* glyphRunAnalysis */ &analysis
         ));
 
-        RETURN_IF_FAILED(analysis->GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1, &bounds));
+        const DWRITE_TEXTURE_TYPE type = cleartype ? DWRITE_TEXTURE_CLEARTYPE_3x1 : DWRITE_TEXTURE_ALIASED_1x1;
+        RETURN_IF_FAILED(analysis->GetAlphaTextureBounds(type, &bounds));
 
         bitmap_size = (bounds.right - bounds.left) * (bounds.bottom - bounds.top);
-        bitmap = new BYTE[bitmap_size];
-        RETURN_IF_FAILED(analysis->CreateAlphaTexture(DWRITE_TEXTURE_ALIASED_1x1, &bounds, bitmap, (UINT32)bitmap_size));
-    }
-
-    IWICImagingFactory* wicFactory = nullptr;
-    RETURN_IF_FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
-    RETURN_IF_FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory)));
-
-    IWICBitmap* wicBitmap = nullptr;
-    RETURN_IF_FAILED(wicFactory->CreateBitmap(bounds.right - bounds.left, bounds.bottom - bounds.top, GUID_WICPixelFormat8bppGray, WICBitmapCacheOnLoad, &wicBitmap));
-
-    {
-        IWICBitmapLock* lock = nullptr;
-        WICRect rect = {0, 0, bounds.right - bounds.left, bounds.bottom - bounds.top};
-        RETURN_IF_FAILED(wicBitmap->Lock(&rect, WICBitmapLockWrite, &lock));
-
-        UINT stride = 0;
-        UINT bufferSize = 0;
-        BYTE* data = nullptr;
-        RETURN_IF_FAILED(lock->GetStride(&stride));
-        RETURN_IF_FAILED(lock->GetDataPointer(&bufferSize, &data));
-
-        const int width = bounds.right - bounds.left;
-        const int height = bounds.bottom - bounds.top;
-        for (int y = 0; y < height; y++) {
-            memcpy(data + y * stride, bitmap + y * width, width);
+        if (cleartype) {
+            bitmap_size *= 3; // 24bpp RGB
         }
 
-        SAFE_RELEASE(lock);
+        bitmap_data = new BYTE[bitmap_size];
+        RETURN_IF_FAILED(analysis->CreateAlphaTexture(type, &bounds, bitmap_data, (UINT32)bitmap_size));
     }
 
+    IWICImagingFactory* wic_factory = nullptr;
+    RETURN_IF_FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+    RETURN_IF_FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic_factory)));
+
+    const REFWICPixelFormatGUID format = cleartype ? GUID_WICPixelFormat24bppRGB : GUID_WICPixelFormat8bppGray;
+    UINT stride = bounds.right - bounds.left;
+    if (cleartype) {
+        stride *= 3; // 24bpp RGB
+    }
+
+    IWICBitmap* bitmap = nullptr;
+    RETURN_IF_FAILED(wic_factory->CreateBitmapFromMemory(
+        /* uiWidth      */ bounds.right - bounds.left,
+        /* uiHeight     */ bounds.bottom - bounds.top,
+        /* pixelFormat  */ format,
+        /* cbStride     */ stride,
+        /* cbBufferSize */ bitmap_size,
+        /* pbBuffer     */ bitmap_data,
+        /* ppIBitmap    */ &bitmap
+    ));
+
     IWICStream* stream = nullptr;
-    RETURN_IF_FAILED(wicFactory->CreateStream(&stream));
+    RETURN_IF_FAILED(wic_factory->CreateStream(&stream));
     RETURN_IF_FAILED(stream->InitializeFromFilename(L"output.png", GENERIC_WRITE));
 
     IWICBitmapEncoder* encoder = nullptr;
-    RETURN_IF_FAILED(wicFactory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder));
+    RETURN_IF_FAILED(wic_factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder));
     RETURN_IF_FAILED(encoder->Initialize(stream, WICBitmapEncoderNoCache));
 
     IWICBitmapFrameEncode* frame = nullptr;
     RETURN_IF_FAILED(encoder->CreateNewFrame(&frame, nullptr));
     RETURN_IF_FAILED(frame->Initialize(nullptr));
-    RETURN_IF_FAILED(frame->WriteSource(wicBitmap, nullptr));
+    RETURN_IF_FAILED(frame->WriteSource(bitmap, nullptr));
     RETURN_IF_FAILED(frame->Commit());
     RETURN_IF_FAILED(encoder->Commit());
 
