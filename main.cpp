@@ -29,11 +29,12 @@
 int wmain(int argc, const wchar_t* argv[])
 {
     const bool cleartype = false;
-    HRESULT hr = S_OK;
     const wchar_t* font_name = L"Segoe UI";
-    const float font_size = 64.0f;
-    const float dpi = 96.0f;
+    const float font_size = 128;
+    const float dpi = 96;
     const UINT32 codepoint = U'γ';
+    
+    HRESULT hr = S_OK;
 
     IDWriteFactory2* factory = nullptr;
     RETURN_IF_FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(factory), (IUnknown**)&factory));
@@ -65,7 +66,7 @@ int wmain(int argc, const wchar_t* argv[])
     DWRITE_GLYPH_OFFSET glyphOffsets[1] = {};
     DWRITE_GLYPH_RUN run = {
         .fontFace = fontFace,
-        .fontEmSize = font_size,
+        .fontEmSize = font_size * dpi / 72.0f, // Convert font size from points (72 DPI) to pixels
         .glyphCount = 1,
         .glyphIndices = glyphIndices,
         .glyphAdvances = glyphAdvances,
@@ -76,17 +77,23 @@ int wmain(int argc, const wchar_t* argv[])
     RETURN_IF_FAILED(factory->CreateRenderingParams(&rendering_params));
 
     DWRITE_RENDERING_MODE renderingMode = DWRITE_RENDERING_MODE_DEFAULT;
-    RETURN_IF_FAILED(fontFace->GetRecommendedRenderingMode(run.fontEmSize, dpi / 96.0f, DWRITE_MEASURING_MODE_NATURAL, rendering_params, &renderingMode));
+    RETURN_IF_FAILED(fontFace->GetRecommendedRenderingMode(run.fontEmSize, 1.0f, DWRITE_MEASURING_MODE_NATURAL, rendering_params, &renderingMode));
 
     RECT bounds{};
     BYTE* bitmap_data = nullptr;
     size_t bitmap_size = 0;
 
+    // CreateGlyphRunAnalysis does not support DWRITE_RENDERING_MODE_OUTLINE.
+    //
+    // Option 1: You don't care about super large font sizes (many hundreds of points).
+    // You can just force it to use the next best thing: DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC.
     if (renderingMode == DWRITE_RENDERING_MODE_OUTLINE) {
-        // TODO: Here's where you would create a ID2D1SimplifiedGeometrySink with Direct2D.
-        // ...I guess? I find DWRITE_RENDERING_MODE_OUTLINE a little confusing.
-        // Fact is, DWRITE_RENDERING_MODE_OUTLINE does not work with CreateGlyphRunAnalysis.
-        assert(false);
+        renderingMode = DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC;
+    }
+
+    // Option 2: You do care about it and you properly use a IDWriteGeometrySink. 
+    if (renderingMode == DWRITE_RENDERING_MODE_OUTLINE) {
+        assert(false); // TODO: Here's where you would create a ID2D1SimplifiedGeometrySink with Direct2D.
         IDWriteGeometrySink* geometrySink = nullptr;
 
         RETURN_IF_FAILED(fontFace->GetGlyphRunOutline(
@@ -115,6 +122,12 @@ int wmain(int argc, const wchar_t* argv[])
 
         const DWRITE_TEXTURE_TYPE type = cleartype ? DWRITE_TEXTURE_CLEARTYPE_3x1 : DWRITE_TEXTURE_ALIASED_1x1;
         RETURN_IF_FAILED(analysis->GetAlphaTextureBounds(type, &bounds));
+
+        // TODO: If the type is DWRITE_TEXTURE_CLEARTYPE_3x1 and the above call failed,
+        // it indicates that the font doesn't support DWRITE_TEXTURE_CLEARTYPE_3x1.
+        // In that case you should retry with DWRITE_TEXTURE_ALIASED_1x1.
+        // 
+        // TODO: You should skip bitmap generation if the returned bounds are empty (= whitespace).
 
         bitmap_size = (bounds.right - bounds.left) * (bounds.bottom - bounds.top);
         if (cleartype) {
