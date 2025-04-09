@@ -2,9 +2,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
-#include <dwrite.h>
-#include <dwrite_1.h>
-#include <dwrite_2.h>
 #include <dwrite_3.h>
 #include <wincodec.h>
 
@@ -33,51 +30,66 @@ int wmain(int argc, const wchar_t* argv[])
     const float font_size = 128;
     const float dpi = 96;
     const UINT32 codepoint = U'γ';
-    
+
     HRESULT hr = S_OK;
 
-    IDWriteFactory2* factory = nullptr;
-    RETURN_IF_FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(factory), (IUnknown**)&factory));
+    IDWriteFactory3* dwrite_factory = nullptr;
+    RETURN_IF_FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(dwrite_factory), (IUnknown**)&dwrite_factory));
 
-    IDWriteFontCollection* fontCollection = nullptr;
-    RETURN_IF_FAILED(factory->GetSystemFontCollection(&fontCollection, FALSE));
+    IDWriteFontCollection* font_collection = nullptr;
+    RETURN_IF_FAILED(dwrite_factory->GetSystemFontCollection(&font_collection, FALSE));
 
-    UINT32 familyIndex = 0;
-    BOOL familyExists = FALSE;
-    RETURN_IF_FAILED(fontCollection->FindFamilyName(font_name, &familyIndex, &familyExists));
-    if (!familyExists) {
+    UINT32 family_index = 0;
+    BOOL family_exists = FALSE;
+    RETURN_IF_FAILED(font_collection->FindFamilyName(font_name, &family_index, &family_exists));
+    if (!family_exists) {
         return E_FAIL;
     }
 
-    IDWriteFontFamily* fontFamily = nullptr;
-    RETURN_IF_FAILED(fontCollection->GetFontFamily(familyIndex, &fontFamily));
+    IDWriteFontFamily* font_family = nullptr;
+    RETURN_IF_FAILED(font_collection->GetFontFamily(family_index, &font_family));
 
     IDWriteFont* font = nullptr;
-    RETURN_IF_FAILED(fontFamily->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &font));
+    RETURN_IF_FAILED(font_family->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &font));
 
-    IDWriteFontFace* fontFace = nullptr;
-    RETURN_IF_FAILED(font->CreateFontFace(&fontFace));
+    IDWriteFontFace* font_face = nullptr;
+    RETURN_IF_FAILED(font->CreateFontFace(&font_face));
 
-    UINT16 glyphIndices[1] = {0};
-    UINT32 codePoints[1] = {codepoint};
-    RETURN_IF_FAILED(fontFace->GetGlyphIndicesW(&codePoints[0], 1, &glyphIndices[0]));
+    IDWriteFontFace3* font_face2 = nullptr;
+    RETURN_IF_FAILED(font_face->QueryInterface(__uuidof(font_face2), (void**)&font_face2));
 
-    FLOAT glyphAdvances[1] = {0};
-    DWRITE_GLYPH_OFFSET glyphOffsets[1] = {};
+    UINT16 glyph_indices[1] = {0};
+    UINT32 codepoints[1] = {codepoint};
+    RETURN_IF_FAILED(font_face->GetGlyphIndicesW(&codepoints[0], 1, &glyph_indices[0]));
+
+    FLOAT glyph_advances[1] = {0};
+    DWRITE_GLYPH_OFFSET glyph_offsets[1] = {};
     DWRITE_GLYPH_RUN run = {
-        .fontFace = fontFace,
+        .fontFace = font_face,
         .fontEmSize = font_size * dpi / 72.0f, // Convert font size from points (72 DPI) to pixels
         .glyphCount = 1,
-        .glyphIndices = glyphIndices,
-        .glyphAdvances = glyphAdvances,
-        .glyphOffsets = glyphOffsets,
+        .glyphIndices = glyph_indices,
+        .glyphAdvances = glyph_advances,
+        .glyphOffsets = glyph_offsets,
     };
 
     IDWriteRenderingParams* rendering_params = nullptr;
-    RETURN_IF_FAILED(factory->CreateRenderingParams(&rendering_params));
+    RETURN_IF_FAILED(dwrite_factory->CreateRenderingParams(&rendering_params));
 
-    DWRITE_RENDERING_MODE renderingMode = DWRITE_RENDERING_MODE_DEFAULT;
-    RETURN_IF_FAILED(fontFace->GetRecommendedRenderingMode(run.fontEmSize, 1.0f, DWRITE_MEASURING_MODE_NATURAL, rendering_params, &renderingMode));
+    DWRITE_RENDERING_MODE1 rendering_mode = DWRITE_RENDERING_MODE1_DEFAULT;
+    DWRITE_GRID_FIT_MODE grid_fit_mode = DWRITE_GRID_FIT_MODE_DEFAULT;
+    RETURN_IF_FAILED(font_face2->GetRecommendedRenderingMode(
+        /* fontEmSize       */ run.fontEmSize,
+        /* dpiX             */ 96.0f,
+        /* dpiY             */ 96.0f,
+        /* transform        */ nullptr,
+        /* isSideways       */ run.isSideways,
+        /* outlineThreshold */ DWRITE_OUTLINE_THRESHOLD_ANTIALIASED,
+        /* measuringMode    */ DWRITE_MEASURING_MODE_NATURAL,
+        /* renderingParams  */ rendering_params,
+        /* renderingMode    */ &rendering_mode,
+        /* gridFitMode      */ &grid_fit_mode
+    ));
 
     RECT bounds{};
     BYTE* bitmap_data = nullptr;
@@ -87,16 +99,16 @@ int wmain(int argc, const wchar_t* argv[])
     //
     // Option 1: You don't care about super large font sizes (many hundreds of points).
     // You can just force it to use the next best thing: DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC.
-    if (renderingMode == DWRITE_RENDERING_MODE_OUTLINE) {
-        renderingMode = DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC;
+    if (rendering_mode == DWRITE_RENDERING_MODE1_OUTLINE) {
+        rendering_mode = DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC;
     }
 
-    // Option 2: You do care about it and you properly use a IDWriteGeometrySink. 
-    if (renderingMode == DWRITE_RENDERING_MODE_OUTLINE) {
+    // Option 2: You do care about it and you properly use a IDWriteGeometrySink.
+    if (rendering_mode == DWRITE_RENDERING_MODE1_OUTLINE) {
         assert(false); // TODO: Here's where you would create a ID2D1SimplifiedGeometrySink with Direct2D.
-        IDWriteGeometrySink* geometrySink = nullptr;
+        IDWriteGeometrySink* geometry_sink = nullptr;
 
-        RETURN_IF_FAILED(fontFace->GetGlyphRunOutline(
+        RETURN_IF_FAILED(font_face->GetGlyphRunOutline(
             /* emSize        */ run.fontEmSize,
             /* glyphIndices  */ run.glyphIndices,
             /* glyphAdvances */ run.glyphAdvances,
@@ -104,16 +116,16 @@ int wmain(int argc, const wchar_t* argv[])
             /* glyphCount    */ run.glyphCount,
             /* isSideways    */ run.isSideways,
             /* isRightToLeft */ run.bidiLevel & 1,
-            /* geometrySink  */ geometrySink
+            /* geometrySink  */ geometry_sink
         ));
     } else {
         IDWriteGlyphRunAnalysis* analysis = nullptr;
-        RETURN_IF_FAILED(factory->CreateGlyphRunAnalysis(
+        RETURN_IF_FAILED(dwrite_factory->CreateGlyphRunAnalysis(
             /* glyphRun         */ &run,
             /* transform        */ nullptr,
-            /* renderingMode    */ renderingMode,
+            /* renderingMode    */ rendering_mode,
             /* measuringMode    */ DWRITE_MEASURING_MODE_NATURAL,
-            /* gridFitMode      */ DWRITE_GRID_FIT_MODE_DEFAULT,
+            /* gridFitMode      */ grid_fit_mode,
             /* antialiasMode    */ cleartype ? DWRITE_TEXT_ANTIALIAS_MODE_CLEARTYPE : DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
             /* baselineOriginX  */ 0.0f,
             /* baselineOriginY  */ 0.0f,
@@ -126,7 +138,7 @@ int wmain(int argc, const wchar_t* argv[])
         // TODO: If the type is DWRITE_TEXTURE_CLEARTYPE_3x1 and the above call failed,
         // it indicates that the font doesn't support DWRITE_TEXTURE_CLEARTYPE_3x1.
         // In that case you should retry with DWRITE_TEXTURE_ALIASED_1x1.
-        // 
+        //
         // TODO: You should skip bitmap generation if the returned bounds are empty (= whitespace).
 
         bitmap_size = (bounds.right - bounds.left) * (bounds.bottom - bounds.top);
@@ -154,7 +166,7 @@ int wmain(int argc, const wchar_t* argv[])
         /* uiHeight     */ bounds.bottom - bounds.top,
         /* pixelFormat  */ format,
         /* cbStride     */ stride,
-        /* cbBufferSize */ bitmap_size,
+        /* cbBufferSize */ (UINT)bitmap_size,
         /* pbBuffer     */ bitmap_data,
         /* ppIBitmap    */ &bitmap
     ));
